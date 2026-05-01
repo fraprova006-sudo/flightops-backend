@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import db from '../db/database.js';
+import { newId, save } from '../db/database.js';
 
 const router = Router();
 
@@ -88,6 +89,30 @@ router.patch('/:id', (req, res) => {
   db.prepare(`UPDATE flights SET ${setClause} WHERE id = ?`).run(...values, req.params.id);
   const flight = db.prepare('SELECT * FROM flights WHERE id = ?').get(req.params.id);
   res.json(flight);
+});
+
+// Route per aggiungere voli di test
+router.post('/seed', async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const voli = [
+      { id: newId(), flight_number: 'FR 1234', airline_code: 'FR', flight_type: 'DEP', origin_destination: 'Londra Stansted', scheduled_time: `${today}T06:35:00`, stand: '7', gate: 'B3', aircraft_type: 'B738', pax_count: 189, status: 'boarding', flight_date: today, delay_minutes: 0, created_at: new Date().toISOString() },
+      { id: newId(), flight_number: 'AZ 0203', airline_code: 'AZ', flight_type: 'ARR', origin_destination: 'Roma Fiumicino', scheduled_time: `${today}T07:50:00`, stand: '3', gate: 'A1', aircraft_type: 'A320', pax_count: 156, status: 'arrived', flight_date: today, delay_minutes: 0, created_at: new Date().toISOString() },
+      { id: newId(), flight_number: 'EI 0718', airline_code: 'EI', flight_type: 'DEP', origin_destination: 'Dublino', scheduled_time: `${today}T10:10:00`, stand: '11', gate: 'C2', aircraft_type: 'A319', pax_count: 143, status: 'scheduled', flight_date: today, delay_minutes: 0, created_at: new Date().toISOString() },
+      { id: newId(), flight_number: 'W6 2241', airline_code: 'W6', flight_type: 'DEP', origin_destination: 'Cracovia', scheduled_time: `${today}T14:25:00`, stand: '9', gate: 'B1', aircraft_type: 'A320', pax_count: 164, status: 'scheduled', flight_date: today, delay_minutes: 15, created_at: new Date().toISOString() },
+      { id: newId(), flight_number: 'VY 6201', airline_code: 'VY', flight_type: 'ARR', origin_destination: 'Barcellona', scheduled_time: `${today}T16:40:00`, stand: '5', gate: 'A2', aircraft_type: 'A320', pax_count: 178, status: 'scheduled', flight_date: today, delay_minutes: 0, created_at: new Date().toISOString() },
+    ];
+
+    voli.forEach(v => {
+      const exists = db.data.flights.find(f => f.flight_number === v.flight_number && f.flight_date === today);
+      if (!exists) db.data.flights.push(v);
+    });
+    await save();
+    res.json({ ok: true, count: voli.length });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Errore seed' });
+  }
 });
 
 export default router;
