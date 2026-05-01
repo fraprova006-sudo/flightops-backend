@@ -84,8 +84,23 @@ export const setupSocketHandlers = (io) => {
         db.data.chat_messages.push(msg);
         await save();
 
+        // Manda a chi ha la chat aperta
         io.to(`flight:${flightId}`).emit('chat:message', msg);
-        
+
+        // Notifica gli operatori assegnati che non sono nella room
+        const assignments = db.data.flight_assignments.filter(a => a.flight_id === flightId);
+        assignments.forEach(a => {
+          if (a.user_id !== userId) {
+            io.to(`user:${a.user_id}`).emit('chat:notification', { flightId, msg });
+          }
+        });
+
+        // Notifica i supervisori
+        const supervisors = db.data.users.filter(u => SUPERVISOR_ROLES.includes(u.role) && u.id !== userId);
+        supervisors.forEach(s => {
+          io.to(`user:${s.id}`).emit('chat:notification', { flightId, msg });
+        });
+
       } catch (err) {
         console.error(err);
         socket.emit('error', { message: 'Errore invio messaggio' });
