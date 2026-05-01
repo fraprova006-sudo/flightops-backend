@@ -1,55 +1,61 @@
 import { Router } from 'express';
-import db from '../db/database.js';
+import db, { newId, save } from '../db/database.js';
 
 const router = Router();
-
 const SUPERVISOR_ROLES = ['COS', 'Responsabile', 'RIT Landside', 'RIT Airside'];
 
 let io = null;
 export const setIo = (ioInstance) => { io = ioInstance; };
 
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   if (!SUPERVISOR_ROLES.includes(req.user.role))
     return res.status(403).json({ error: 'Solo i supervisori possono assegnare' });
 
   const { flightId, userId, roleAssigned } = req.body;
 
   try {
-    const existing = db.prepare(
-      'SELECT id FROM flight_assignments WHERE flight_id = ? AND role_assigned = ?'
-    ).get(flightId, roleAssigned);
-
-    if (existing) {
-      db.prepare(
-        'UPDATE flight_assignments SET user_id = ?, assigned_by = ?, assigned_at = datetime("now") WHERE id = ?'
-      ).run(userId, req.user.id, existing.id);
-    } else {
-      const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      db.prepare(`
-        INSERT INTO flight_assignments (id, flight_id, user_id, role_assigned, assigned_by)
-        VALUES (?, ?, ?, ?, ?)
-      `).run(id, flightId, userId, roleAssigned, req.user.id);
-    }
-
-    const flight = db.prepare(
-      'SELECT flight_number, origin_destination, gate FROM flights WHERE id = ?'
-    ).get(flightId);
-
-    const notifId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    db.prepare(`
-      INSERT INTO notifications (id, user_id, type, title, body, flight_id)
-      VALUES (?, ?, 'assignment', ?, ?, ?)
-    `).run(
-      notifId, userId,
-      `Assegnato: ${flight.flight_number}`,
-      `Sei stato assegnato come ${roleAssigned} per il volo ${flight.flight_number} - ${flight.origin_destination}`,
-      flightId
+    const existing = db.data.flight_assignments.find(
+      a => a.flight_id === flightId && a.role_assigned === roleAssigned
     );
 
-    db.prepare(`
-      INSERT INTO global_log (event_type, actor_id, flight_id, payload)
-      VALUES ('assignment', ?, ?, ?)
-    `).run(req.user.id, flightId, JSON.stringify({ userId, roleAssigned }));
+    if (existing) {
+      existing.user_id = userId;
+      existing.assigned_by = req.user.id;
+      existing.assigned_at = new Date().toISOString();
+    } else {
+      db.data.flight_assignments.push({
+        id: newId(),
+        flight_id: flightId,
+        user_id: userId,
+        role_assigned: roleAssigned,
+        assigned_by: req.user.id,
+        assigned_at: new Date().toISOString(),
+        notified: 0,
+      });
+    }
+
+    const flight = db.data.flights.find(f => f.id === flightId);
+
+    db.data.notifications.push({
+      id: newId(),
+      user_id: userId,
+      type: 'assignment',
+      title: `Assegnato: ${flight.flight_number}`,
+      body: `Sei stato assegnato come ${roleAssigned} per il volo ${flight.flight_number} - ${flight.origin_destination}`,
+      flight_id: flightId,
+      is_read: 0,
+      created_at: new Date().toISOString(),
+    });
+
+    db.data.global_log.push({
+      event_type: 'assignment',
+      actor_id: req.user.id,
+      flight_id: flightId,
+      payload: JSON.stringify({ userId, roleAssigned }),
+      created_at: new Date().toISOString(),
+    });
+
+    await save();
 
     if (io) {
       io.to(`user:${userId}`).emit('notification:assignment', {
@@ -69,12 +75,12 @@ router.post('/', (req, res) => {
 });
 
 router.get('/flight/:flightId', (req, res) => {
-  const assignments = db.prepare(`
-    SELECT fa.*, u.full_name, u.username, u.role
-    FROM flight_assignments fa
-    JOIN users u ON u.id = fa.user_id
-    WHERE fa.flight_id = ?
-  `).all(req.params.flightId);
+  const assignments = db.data.flight_assignments
+    .filter(a => a.flight_id === req.params.flightId)
+    .map(a => {
+      const user = db.data.users.find(u => u.id === a.user_id);
+      return { ...a, full_name: user?.full_name, username: user?.username, role: user?.role };
+    });
   res.json(assignments);
 });
 

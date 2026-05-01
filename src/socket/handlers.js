@@ -1,14 +1,13 @@
 import jwt from 'jsonwebtoken';
-import db from '../db/database.js';
+import db, { newId, save } from '../db/database.js';
 
 const SUPERVISOR_ROLES = ['COS', 'Responsabile', 'RIT Landside', 'RIT Airside'];
 
 function canAccessFlight(userId, role, flightId) {
   if (SUPERVISOR_ROLES.includes(role)) return true;
-  const assignment = db.prepare(
-    'SELECT id FROM flight_assignments WHERE flight_id = ? AND user_id = ?'
-  ).get(flightId, userId);
-  return !!assignment;
+  return db.data.flight_assignments.some(
+    a => a.flight_id === flightId && a.user_id === userId
+  );
 }
 
 function formatEventLabel(eventType) {
@@ -39,7 +38,7 @@ export const setupSocketHandlers = (io) => {
     const token = socket.handshake.auth?.token;
     if (!token) return next(new Error('Non autenticato'));
     try {
-      const payload = jwt.verify(token, process.env.JWT_SECRET || 'flightops-secret-dev-2024');
+      const payload = jwt.verify(token, process.env.JWT_SECRET || 'flightops-segreto-lunghissimo-2024');
       socket.user = payload;
       next();
     } catch {
@@ -65,28 +64,28 @@ export const setupSocketHandlers = (io) => {
       socket.leave(`flight:${flightId}`);
     });
 
-    socket.on('chat:send', ({ flightId, content, messageType = 'text' }) => {
+    socket.on('chat:send', async ({ flightId, content, messageType = 'text' }) => {
       if (!canAccessFlight(userId, role, flightId))
         return socket.emit('error', { message: 'Accesso negato' });
 
       try {
-        const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
-        db.prepare(`
-          INSERT INTO chat_messages (id, flight_id, sender_id, content, message_type)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(id, flightId, userId, content, messageType);
-
-        const user = db.prepare('SELECT full_name, role FROM users WHERE id = ?').get(userId);
-        const msg = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(id);
-
-        const enrichedMsg = {
-          ...msg,
-          senderName: user?.full_name,
-          senderRole: user?.role,
+        const user = db.data.users.find(u => u.id === userId);
+        const msg = {
+          id: newId(),
+          flight_id: flightId,
+          sender_id: userId,
+          content,
+          message_type: messageType,
+          is_system: 0,
+          created_at: new Date().toISOString(),
+          sender_name: user?.full_name,
+          sender_role: user?.role,
         };
+        db.data.chat_messages.push(msg);
+        await save();
 
-        io.to(`flight:${flightId}`).emit('chat:message', enrichedMsg);
-        io.to('supervisors').emit('chat:message', { ...enrichedMsg, flightId });
+        io.to(`flight:${flightId}`).emit('chat:message', msg);
+        io.to('supervisors').emit('chat:message', { ...msg, flightId });
 
       } catch (err) {
         console.error(err);
@@ -94,28 +93,42 @@ export const setupSocketHandlers = (io) => {
       }
     });
 
-    socket.on('timeline:event', ({ flightId, eventType, notes }) => {
+    socket.on('timeline:event', async ({ flightId, eventType, notes }) => {
       if (!canAccessFlight(userId, role, flightId)) return;
 
       try {
-        const evId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-        db.prepare(`
-          INSERT INTO timeline_events (id, flight_id, event_type, triggered_by, notes)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(evId, flightId, eventType, userId, notes || null);
+        db.data.timeline_events.push({
+          id: newId(),
+          flight_id: flightId,
+          event_type: eventType,
+          triggered_by: userId,
+          triggered_at: new Date().toISOString(),
+          notes: notes || null,
+        });
 
-        const msgId = Math.random().toString(36).slice(2) + Date.now().toString(36);
-        db.prepare(`
-          INSERT INTO chat_messages (id, flight_id, sender_id, content, message_type, is_system)
-          VALUES (?, ?, ?, ?, 'system', 1)
-        `).run(msgId, flightId, userId, `⏱ ${formatEventLabel(eventType)}`);
+        const user = db.data.users.find(u => u.id === userId);
+        const msg = {
+          id: newId(),
+          flight_id: flightId,
+          sender_id: userId,
+          content: `⏱ ${formatEventLabel(eventType)}`,
+          message_type: 'system',
+          is_system: 1,
+          created_at: new Date().toISOString(),
+          sender_name: user?.full_name,
+          sender_role: user?.role,
+        };
+        db.data.chat_messages.push(msg);
 
-        db.prepare(`
-          INSERT INTO global_log (event_type, actor_id, flight_id, payload)
-          VALUES ('timeline', ?, ?, ?)
-        `).run(userId, flightId, JSON.stringify({ eventType, notes }));
+        db.data.global_log.push({
+          event_type: 'timeline',
+          actor_id: userId,
+          flight_id: flightId,
+          payload: JSON.stringify({ eventType, notes }),
+          created_at: new Date().toISOString(),
+        });
 
-        const msg = db.prepare('SELECT * FROM chat_messages WHERE id = ?').get(msgId);
+        await save();
 
         io.to(`flight:${flightId}`).emit('chat:message', msg);
         io.to(`flight:${flightId}`).emit('timeline:updated', { flightId, eventType });
@@ -126,8 +139,13 @@ export const setupSocketHandlers = (io) => {
       }
     });
 
-    socket.on('disconnect', () => {
-      db.prepare('UPDATE users SET is_online = 0, last_seen = datetime("now") WHERE id = ?').run(userId);
+    socket.on('disconnect', async () => {
+      const user = db.data.users.find(u => u.id === userId);
+      if (user) {
+        user.is_online = 0;
+        user.last_seen = new Date().toISOString();
+        await save();
+      }
       console.log(`[Socket] disconnesso: ${userId}`);
     });
   });
