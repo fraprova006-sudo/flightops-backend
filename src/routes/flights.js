@@ -41,6 +41,8 @@ router.get('/', (req, res) => {
   }
 });
 
+router.post('/seed', async (req, res) => {
+
 router.get('/:id', (req, res) => {
   const flight = db.prepare('SELECT * FROM flights WHERE id = ?').get(req.params.id);
   if (!flight) return res.status(404).json({ error: 'Volo non trovato' });
@@ -92,7 +94,7 @@ router.patch('/:id', (req, res) => {
 });
 
 // Route per aggiungere voli di test
-router.post('/seed', async (req, res) => {
+
   try {
     const today = new Date().toISOString().split('T')[0];
     const voli = [
