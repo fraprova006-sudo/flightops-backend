@@ -7,10 +7,8 @@ export const authenticateToken = (req, res, next) => {
   if (!token) return res.status(401).json({ error: 'Token mancante' });
 
   try {
-    const payload = jwt.verify(token, process.env.JWT_SECRET || 'flightops-secret-dev-2024');
-    const user = db.prepare(
-      'SELECT id, username, full_name, role, is_bcu_active FROM users WHERE id = ?'
-    ).get(payload.userId);
+    const payload = jwt.verify(token, process.env.JWT_SECRET || 'flightops-segreto-lunghissimo-2024');
+    const user = db.data.users.find(u => u.id === payload.userId);
     if (!user) return res.status(401).json({ error: 'Utente non trovato' });
     req.user = user;
     next();
