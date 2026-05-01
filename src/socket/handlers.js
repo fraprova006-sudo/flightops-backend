@@ -85,8 +85,7 @@ export const setupSocketHandlers = (io) => {
         await save();
 
         io.to(`flight:${flightId}`).emit('chat:message', msg);
-        io.to('supervisors').emit('chat:message', { ...msg, flightId });
-
+        
       } catch (err) {
         console.error(err);
         socket.emit('error', { message: 'Errore invio messaggio' });
